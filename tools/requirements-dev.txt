@@ -1,0 +1,5 @@
+# Host tools for deploying & editor hints
+mpremote==1.26.1
+pyserial==3.5
+# Type hints for MicroPython modules (machine, ujson, ustruct, time.ticks_ms, gc.mem_free, etc.)
+micropython-rp2-rpi_pico2-stubs==1.26.0.post1

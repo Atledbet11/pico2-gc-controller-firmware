@@ -4,3 +4,4 @@ __pycache__/
 *.uf2
 *.pyc
 .DS_Store
+.venv/
