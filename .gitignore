@@ -1,0 +1,6 @@
+__pycache__/
+.vscode/
+.idea/
+*.uf2
+*.pyc
+.DS_Store
