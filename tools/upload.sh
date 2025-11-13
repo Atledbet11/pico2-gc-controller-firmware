@@ -1,57 +1,69 @@
 #!/usr/bin/env bash
-# Upload helper for Pico (Linux/macOS).
-# Forwards flags to tools/upload_to_pico.py and bootstraps .venv if needed.
-
 set -euo pipefail
 
-PORT=""
-CLEAN=0
-DRYRUN=0
-YES=0
-RESET=0
-LIST=0
-SRC_ROOT="."
-EXTRA=()
+MODE="${1:-default}"
+MOUNT="${2:-${CPY_MOUNT:-}}"
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --port)      PORT="$2"; shift 2 ;;
-    --clean)     CLEAN=1; shift ;;
-    --dry-run)   DRYRUN=1; shift ;;
-    --yes|-y)    YES=1; shift ;;
-    --reset)     RESET=1; shift ;;
-    --list)      LIST=1; shift ;;
-    --src-root)  SRC_ROOT="$2"; shift 2 ;;
-    --)          shift; EXTRA+=("$@"); break ;;
-    *)           EXTRA+=("$1"); shift ;;
-  esac
-done
+find_mount() {
+  if [[ -n "$MOUNT" ]]; then
+    [[ -d "$MOUNT" ]] || { echo "Mount path '$MOUNT' not found." >&2; exit 1; }
+    echo "$MOUNT"; return
+  fi
+  # Common locations
+  for d in /Volumes/CIRCUITPY "/media/$USER/CIRCUITPY" "/run/media/$USER/CIRCUITPY" /mnt/CIRCUITPY; do
+    [[ -d "$d" ]] && { echo "$d"; return; }
+  done
+  # Fallback: search for boot_out.txt
+  for d in /media/*/* /run/media/*/* /mnt/* /Volumes/*; do
+    [[ -d "$d" ]] || continue
+    [[ -f "$d/boot_out.txt" || -f "$d/code.py" ]] && { echo "$d"; return; }
+  done
+  echo "CIRCUITPY not found. Pass path as 2nd arg or set CPY_MOUNT." >&2
+  exit 1
+}
 
-# Go to repo root (script dir/..)
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$here/.."
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
 
-# Bootstrap venv if missing
-if [[ ! -d ".venv" ]]; then
-  echo "Bootstrapping .venv..."
-  bash tools/bootstrap.sh
+dst_root="$(find_mount)"
+echo "CIRCUITPY: $dst_root"
+
+src_boot="$repo_root/boot.py"
+src_code="$repo_root/code.py"
+src_lib="$repo_root/lib"
+
+[[ -f "$src_boot" ]] || { echo "Missing $src_boot"; exit 1; }
+[[ -f "$src_code" ]] || { echo "Missing $src_code"; exit 1; }
+
+dst_boot="$dst_root/boot.py"
+dst_code="$dst_root/code.py"
+dst_lib="$dst_root/lib"
+
+if [[ "$MODE" == "clean" ]]; then
+  echo "Clean mode: removing $dst_lib ..."
+  rm -rf "$dst_lib"
+  sleep 0.1
 fi
 
-# Activate venv and ensure tools
-# shellcheck disable=SC1091
-source .venv/bin/activate
-python -m pip install --upgrade pip >/dev/null
-pip install -r tools/requirements-dev.txt >/dev/null
+# Copy order: lib -> code.py -> boot.py
+if [[ -d "$src_lib" ]]; then
+  echo "Copying lib/ ..."
+  mkdir -p "$dst_lib"
+  # Use rsync if available (faster), else cp -R
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete-excluded "$src_lib"/ "$dst_lib"/
+  else
+    cp -R "$src_lib"/. "$dst_lib"/
+  fi
+fi
 
-# Build args for uploader
-ARGS=()
-[[ -n "$PORT" ]]        && ARGS+=("--port" "$PORT")
-[[ $CLEAN -eq 1 ]]      && ARGS+=("--clean")
-[[ $DRYRUN -eq 1 ]]     && ARGS+=("--dry-run")
-[[ $YES -eq 1 ]]        && ARGS+=("--yes")
-[[ $RESET -eq 1 ]]      && ARGS+=("--reset")
-[[ $LIST -eq 1 ]]       && ARGS+=("--list")
-[[ "$SRC_ROOT" != "." ]]&& ARGS+=("--src-root" "$SRC_ROOT")
-ARGS+=("${EXTRA[@]}")
+echo "Copying code.py ..."
+cp -f "$src_code" "$dst_code"
 
-python tools/upload_to_pico.py "${ARGS[@]}"
+echo "Copying boot.py ..."
+cp -f "$src_boot" "$dst_boot"
+
+# Flush writes
+sync || true
+echo "Done."
+echo "If you changed boot.py, press RESET (or replug) to re-enumerate dual CDC."
